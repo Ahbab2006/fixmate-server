@@ -42,7 +42,12 @@ app.use("/api/services", serviceRoutes);
 app.use("/api/bookings", bookingRoutes);
 
 // Protected Test Route
-
+app.get("/api/test/protected", verifyToken, (req, res) => {
+  res.status(200).json({
+    message: "Authentication successful!",
+    user: req.user,
+  });
+});
 
 // Customer Only Route
 app.get(
