@@ -24,7 +24,12 @@ app.use("/api/users", userRoutes);
 app.use("/api/payments", paymentRoutes);
 
 // Admin Payments Route Alias (Assignment Challenge 2)
-
+app.get(
+  "/api/admin/payments",
+  verifyToken,
+  verifyRole("admin"),
+  getAllPayments
+);
 
 
 // Home Route
