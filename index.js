@@ -24,30 +24,17 @@ app.use("/api/users", userRoutes);
 app.use("/api/payments", paymentRoutes);
 
 // Admin Payments Route Alias (Assignment Challenge 2)
-app.get(
-  "/api/admin/payments",
-  verifyToken,
-  verifyRole("admin"),
-  getAllPayments
-);
+
 
 
 // Home Route
-app.get("/", (req, res) => {
-  res.send("FixMate Server is Running!");
-});
+
 
 // Service Routes
-app.use("/api/services", serviceRoutes);
-app.use("/api/bookings", bookingRoutes);
+
 
 // Protected Test Route
-app.get("/api/test/protected", verifyToken, (req, res) => {
-  res.status(200).json({
-    message: "Authentication successful!",
-    user: req.user,
-  });
-});
+
 
 // Customer Only Route
 app.get(
