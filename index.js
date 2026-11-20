@@ -38,7 +38,8 @@ app.get("/", (req, res) => {
 });
 
 // Service Routes
-
+app.use("/api/services", serviceRoutes);
+app.use("/api/bookings", bookingRoutes);
 
 // Protected Test Route
 
