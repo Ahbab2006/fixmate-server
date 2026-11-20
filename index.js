@@ -33,7 +33,9 @@ app.get(
 
 
 // Home Route
-
+app.get("/", (req, res) => {
+  res.send("FixMate Server is Running!");
+});
 
 // Service Routes
 
