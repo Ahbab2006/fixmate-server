@@ -19,7 +19,20 @@ import {
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+
+// Stripe Webhook (Challenge 4) requires the pristine raw Buffer for HMAC signature verification.
+// Exclude /api/payments/webhook from global express.json() so express.raw() in paymentRoutes parses it.
+app.use((req, res, next) => {
+  if (
+    req.originalUrl &&
+    req.originalUrl.split("?")[0].replace(/\/+$/, "") === "/api/payments/webhook"
+  ) {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
+
 app.use("/api/users", userRoutes);
 app.use("/api/payments", paymentRoutes);
 

@@ -3,15 +3,25 @@ import express from "express";
 
 import {
   createCheckoutSession,
-    verifyCheckoutSession,
-     getMyPayments,
+  verifyCheckoutSession,
+  getMyPayments,
   getAllPayments,
+  handleStripeWebhook,
 } from "../controllers/paymentController.js";
 
 import { verifyToken } from "../middleware/verifyToken.js";
 import { verifyRole } from "../middleware/verifyRole.js";
 
 const router = express.Router();
+
+// Stripe Webhook (Assignment Challenge 4)
+// Receives raw body for Stripe HMAC SHA-256 signature verification.
+// Public endpoint called directly by Stripe; secured via STRIPE_WEBHOOK_SECRET.
+router.post(
+  "/webhook",
+  express.raw({ type: "application/json" }),
+  handleStripeWebhook
+);
 
 // Customer Payment
 router.post(

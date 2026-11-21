@@ -185,6 +185,7 @@ Create a `.env` file in the project root with the following configuration keys. 
 | `BETTER_AUTH_URL` | **Yes** | Base URL of the client hosting Better Auth JWKS (e.g., `http://localhost:3000` or production Vercel URL) |
 | `CLIENT_URL` | **Yes** | Base URL of the client frontend for Stripe success/cancel redirects (e.g., `http://localhost:3000`) |
 | `STRIPE_SECRET_KEY` | **Yes** | Stripe secret API key (starts with `sk_test_...` for test mode or `sk_live_...` for live mode) |
+| `STRIPE_WEBHOOK_SECRET` | Optional (Dev) / **Yes** (Prod) | Stripe webhook endpoint signing secret (starts with `whsec_...`) used to cryptographically verify incoming Stripe event signatures (Assignment Challenge 4) |
 
 ---
 
@@ -594,6 +595,31 @@ Authorization: Bearer <JWT_TOKEN>
   }
   ```
 
+#### `POST /api/payments/webhook`
+- **Access:** Public (Stripe Webhook caller verified cryptographically via `stripe-signature` header)
+- **Description:** Asynchronous webhook endpoint (Assignment Challenge 4). Cryptographically validates incoming Stripe event signatures using `STRIPE_WEBHOOK_SECRET` and `stripe.webhooks.constructEvent`. Processes `checkout.session.completed` events, updates the booking to `paymentStatus: "paid"`, and idempotently records the transaction in the `payments` collection.
+- **Headers:**
+  - `Content-Type: application/json`
+  - `stripe-signature: t=<timestamp>,v1=<signature>`
+- **Request Body:** Pristine raw JSON buffer (excluded from global `express.json()` and captured via `express.raw({ type: "application/json" })`).
+- **Events Handled:**
+  - `checkout.session.completed`: Verifies `payment_status === "paid"`, extracts `bookingId` from `session.metadata`, validates booking existence and amount matching in USD (`usd`), idempotently inserts payment document, and marks booking `paymentStatus: "paid"`.
+  - All other Stripe event types: Safely acknowledged and logged with `{ "received": true }` to maintain healthy webhook delivery telemetry.
+- **Response `200`:**
+  ```json
+  {
+    "received": true,
+    "message": "Payment verified and booking updated successfully."
+  }
+  ```
+- **Response `400`:**
+  ```json
+  {
+    "received": false,
+    "message": "Webhook signature verification failed: ..."
+  }
+  ```
+
 #### `GET /api/payments/my-payments`
 - **Access:** Customer Only
 - **Description:** Retrieves the customer's personal payment history and lifetime expenditure.
@@ -784,7 +810,9 @@ export function verifyRole(...allowedRoles) {
 
 ## 12. Stripe Checkout & Payment Verification
 
-FixMate uses a customer-redirect payment verification architecture with zero reliance on background webhook race conditions.
+FixMate implements a high-reliability dual-confirmation payment architecture:
+1. **Synchronous Direct Verification:** When the customer completes payment on Stripe Checkout and returns to `/payment/success?session_id=...`, the client triggers `POST /api/payments/verify-checkout-session` for instantaneous UX feedback.
+2. **Asynchronous Stripe Webhook (Assignment Challenge 4):** As an automated safeguard, Stripe dispatches `checkout.session.completed` events directly to `POST /api/payments/webhook`, ensuring bookings are settled even if the user closes their browser before redirecting.
 
 ```mermaid
 sequenceDiagram
@@ -792,30 +820,77 @@ sequenceDiagram
     actor Customer
     participant Frontend as FixMate Client
     participant Backend as FixMate Server
-    participant Stripe as Stripe API
+    participant Stripe as Stripe API & Webhooks
     participant DB as MongoDB Atlas
 
     Customer->>Frontend: Click "Pay Now" on completed booking
     Frontend->>Backend: POST /api/payments/create-checkout-session { bookingId }
     Backend->>DB: Verify booking completed & unpaid
-    Backend->>Stripe: stripe.checkout.sessions.create({ currency: 'usd', ... })
+    Backend->>Stripe: stripe.checkout.sessions.create({ currency: 'usd', metadata: { bookingId } })
     Stripe-->>Backend: Return session URL
     Backend-->>Frontend: { checkoutUrl: session.url }
     Frontend->>Stripe: Redirect to Stripe Hosted Checkout
-    Customer->>Stripe: Completes payment
-    Stripe-->>Frontend: Redirect to /payment/success?session_id=cs_...
-    Frontend->>Backend: POST /api/payments/verify-checkout-session { sessionId }
-    Backend->>Stripe: stripe.checkout.sessions.retrieve(sessionId)
-    Stripe-->>Backend: Return verified session (status: 'paid')
-    Backend->>DB: Insert payment record & update booking to 'paid'
-    Backend-->>Frontend: { success: true, payment }
-    Frontend-->>Customer: Display Verified Payment Receipt
+    Customer->>Stripe: Submits payment
+
+    par Path A: Synchronous Return
+        Stripe-->>Frontend: Redirect to /payment/success?session_id=cs_...
+        Frontend->>Backend: POST /api/payments/verify-checkout-session { sessionId }
+        Backend->>Stripe: stripe.checkout.sessions.retrieve(sessionId)
+        Backend->>DB: Record payment & update booking to 'paid' (Idempotent)
+        Backend-->>Frontend: { success: true, payment }
+        Frontend-->>Customer: Display Verified Payment Receipt
+    and Path B: Asynchronous Webhook (Challenge 4)
+        Stripe->>Backend: POST /api/payments/webhook [checkout.session.completed]
+        Note over Backend: Cryptographically verifies signature with STRIPE_WEBHOOK_SECRET
+        Backend->>DB: Record payment & update booking to 'paid' (Idempotent)
+        Backend-->>Stripe: HTTP 200 { received: true }
+    end
 ```
 
-### Safety & Double-Payment Guards
+### Safety, Idempotency & Double-Payment Guards
 1. **Database Lockouts:** Bookings marked `paymentStatus: "paid"` are rejected by `createCheckoutSession` with a `409 Conflict`.
-2. **Session Verification Matching:** `verifyCheckoutSession` validates that `session.amount_total` matches `Math.round(booking.finalAmount * 100)` and that currency is strictly `"usd"`.
-3. **Idempotency:** Unique index on `stripeSessionId` and `bookingId` ensures that concurrent or repeated verification calls return the existing verified receipt rather than duplicate entries.
+2. **Session Verification Matching:** Both `verifyCheckoutSession` and `handleStripeWebhook` validate that `session.amount_total` matches `Math.round(booking.finalAmount * 100)` and that currency is strictly `"usd"`.
+3. **Compound Unique Indexes:** MongoDB Atlas enforces `unique: true` on both `payments.bookingId` (`payment_booking_unique`) and `payments.stripeSessionId` (`payment_stripe_session_unique`). If Path A and Path B execute simultaneously, one succeeds and the other encounters a duplicate key error (`E11000`), which is safely intercepted, treated as idempotent success, and returned with HTTP 200.
+4. **Raw Body Preservation:** The Express server is architected so that `POST /api/payments/webhook` bypasses global `express.json()` and uses `express.raw({ type: "application/json" })`. This guarantees byte-for-byte HMAC SHA-256 signature verification matching with Stripe's signing secret.
+
+### Local Webhook Testing via Stripe CLI
+To test Stripe webhooks locally during development:
+1. Install the official [Stripe CLI](https://docs.stripe.com/stripe-cli).
+2. Authenticate the CLI with your Stripe account:
+   ```bash
+   stripe login
+   ```
+3. Start forwarding webhook events to your local FixMate server:
+   ```bash
+   stripe listen --forward-to localhost:5000/api/payments/webhook
+   ```
+4. Copy the webhook signing secret printed by the CLI (e.g., `whsec_...`) and set it in your `fixmate-server/.env` file:
+   ```env
+   STRIPE_WEBHOOK_SECRET=whsec_your_forwarding_secret
+   ```
+5. Trigger a test event or complete a test checkout in the client:
+   ```bash
+   stripe trigger checkout.session.completed
+   ```
+
+### Production Stripe Dashboard Webhook Configuration
+To configure webhooks on the production backend (e.g., Render):
+1. Log in to the [Stripe Dashboard](https://dashboard.stripe.com/).
+2. In the top right, ensure you are in **Test Mode** (or Live Mode when launching).
+3. Navigate to **Developers > Webhooks**.
+4. Click **Add endpoint**.
+5. Set the **Endpoint URL** to:
+   ```text
+   https://fixmate-server-mt4l.onrender.com/api/payments/webhook
+   ```
+6. Click **+ Select events** and select:
+   - `checkout.session.completed`
+7. Click **Add endpoint**.
+8. Under the **Signing secret** section, click **Reveal** to copy the signing secret (`whsec_...`).
+9. Add the secret to your production hosting environment (e.g., Render Environment Variables):
+   - Key: `STRIPE_WEBHOOK_SECRET`
+   - Value: `whsec_...`
+10. Trigger a deployment or restart the server on Render to apply the variable.
 
 ---
 
