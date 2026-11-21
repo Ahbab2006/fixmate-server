@@ -897,8 +897,8 @@ Under the **Environment** tab, add the following key-value pairs:
 
 - **Frontend Client Repository:** [https://github.com/Ahbab2006/fixmate-client](https://github.com/Ahbab2006/fixmate-client)
 - **Backend Server Repository:** [https://github.com/Ahbab2006/fixmate-server](https://github.com/Ahbab2006/fixmate-server)
-- **Production Client (Vercel):** [FixMate Client on Vercel](https://github.com/Ahbab2006/fixmate-client) *(Deploy target)*
-- **Production Backend (Render):** [FixMate Server on Render](https://github.com/Ahbab2006/fixmate-server) *(Deploy target)*
+- **Production Client (Vercel):** [https://fixmate-client-three.vercel.app/](https://github.com/Ahbab2006/fixmate-client) *(Deploy target)*
+- **Production Backend (Render):** [https://fixmate-server-mt4l.onrender.com](https://github.com/Ahbab2006/fixmate-server) *(Deploy target)*
 
 ---
 
