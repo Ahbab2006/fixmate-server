@@ -29,6 +29,7 @@
     - [Payments API](#payments-api)
     - [User Profile API](#user-profile-api)
     - [Admin & User Management API](#admin--user-management-api)
+    - [Test & Diagnostics API](#test--diagnostics-api)
 11. [Authorization & Role-Based Access Control](#11-authorization--role-based-access-control)
 12. [Stripe Checkout & Payment Verification](#12-stripe-checkout--payment-verification)
 13. [Payment Configuration & Currency Policy](#13-payment-configuration--currency-policy)
@@ -200,18 +201,18 @@ Because cloud hosts (such as Render or Vercel) allocate dynamic IP addresses, yo
 ### Automated Indexes
 When `connectToMongoDB()` runs in `config/db.js`, `initializeDatabase()` automatically creates the following database indexes:
 
-| Collection | Indexed Field(s) | Index Options | Purpose |
-| :--- | :--- | :--- | :--- |
-| **`user`** | `email: 1` | `unique: true` | Fast user lookup & duplicate prevention |
-| **`services`** | `technicianEmail: 1` | Standard | Technician portfolio filtering |
-| **`services`** | `category: 1` | Standard | Category search optimization |
-| **`services`** | `approvalStatus: 1` | Standard | Admin approval querying |
-| **`bookings`** | `customerEmail: 1` | Standard | Customer booking history lookup |
-| **`bookings`** | `technicianEmail: 1` | Standard | Technician request queue retrieval |
-| **`bookings`** | `serviceId: 1` | Standard | Booking-to-service mapping |
-| **`bookings`** | `status: 1` | Standard | State filtering (`requested`, `completed`, etc.) |
-| **`payments`** | `bookingId: 1` | `unique: true` | Prevents double-payment for a booking |
-| **`payments`** | `stripeSessionId: 1` | `unique: true` | Prevents duplicate Stripe session recording |
+| Collection | Indexed Field(s) | Index Name | Options | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| **`user`** | `email: 1` | `user_email_unique` | `unique: true` | Fast user lookup & duplicate prevention |
+| **`services`** | `technicianEmail: 1` | `service_technician_email` | Standard | Technician portfolio filtering |
+| **`services`** | `category: 1` | `service_category` | Standard | Category search optimization |
+| **`services`** | `approvalStatus: 1` | `service_approval_status` | Standard | Admin approval querying |
+| **`bookings`** | `customerEmail: 1` | `booking_customer_email` | Standard | Customer booking history lookup |
+| **`bookings`** | `technicianEmail: 1` | `booking_technician_email` | Standard | Technician request queue retrieval |
+| **`bookings`** | `serviceId: 1` | `booking_service_id` | Standard | Booking-to-service mapping |
+| **`bookings`** | `status: 1` | `booking_status` | Standard | State filtering (`requested`, `completed`, etc.) |
+| **`payments`** | `bookingId: 1` | `payment_booking_unique` | `unique: true` | Prevents double-payment for a booking |
+| **`payments`** | `stripeSessionId: 1` | `payment_stripe_session_unique` | `unique: true` | Prevents duplicate Stripe session recording |
 
 ---
 
@@ -346,7 +347,7 @@ Authorization: Bearer <JWT_TOKEN>
   ```json
   {
     "success": true,
-    "message": "Service created successfully and submitted for admin approval.",
+    "message": "Service created successfully. Waiting for admin approval.",
     "serviceId": "6740b3c..."
   }
   ```
@@ -358,21 +359,27 @@ Authorization: Bearer <JWT_TOKEN>
   ```json
   {
     "success": true,
-    "message": "Service updated successfully and resubmitted for admin approval."
+    "message": "Service updated successfully. Waiting for admin approval."
   }
   ```
 
 #### `PATCH /api/services/:id/availability`
 - **Access:** Technician Only
 - **Description:** Toggles whether the service is accepting bookings (`isAvailable`).
+- **Request Body:**
+  ```json
+  {
+    "isAvailable": false
+  }
+  ```
 - **Response `200`:**
   ```json
   {
     "success": true,
-    "message": "Service availability updated successfully.",
-    "isAvailable": false
+    "message": "Service disabled successfully."
   }
   ```
+  *(Returns `"Service enabled successfully."` when `isAvailable: true`)*
 
 #### `DELETE /api/services/:id`
 - **Access:** Technician Only
@@ -387,15 +394,20 @@ Authorization: Bearer <JWT_TOKEN>
 
 #### `GET /api/services/admin/services`
 - **Access:** Admin Only
-- **Query Parameters:** `status` (`pending`, `approved`, `rejected`, or omit for all).
+- **Query Parameters:**
+  - `approvalStatus` *(string)*: `pending` (default), `approved`, `rejected`, or `all`.
 - **Response `200`:**
   ```json
   {
     "success": true,
     "totalServices": 24,
+    "approvalStatus": "pending",
     "services": [ ... ]
   }
   ```
+
+> [!NOTE]
+> The route alias `GET /api/services/admin/pending` is also available for backward compatibility.
 
 #### `GET /api/services/admin/stats`
 - **Access:** Admin Only
@@ -425,9 +437,10 @@ Authorization: Bearer <JWT_TOKEN>
   ```json
   {
     "success": true,
-    "message": "Service status updated to approved successfully."
+    "message": "Service approved successfully."
   }
   ```
+  *(Or `"Service rejected successfully."` when `approvalStatus: "rejected"`)*
 
 ---
 
@@ -505,8 +518,7 @@ Authorization: Bearer <JWT_TOKEN>
   ```json
   {
     "success": true,
-    "message": "Booking status updated to completed successfully.",
-    "status": "completed"
+    "message": "Booking completed successfully."
   }
   ```
 
@@ -567,10 +579,17 @@ Authorization: Bearer <JWT_TOKEN>
       "bookingId": "6740c4a...",
       "stripeSessionId": "cs_test_a1b2c3d4...",
       "transactionId": "pi_3MtwLw2eZvKYlo2C01234567",
+      "paymentIntentId": "pi_3MtwLw2eZvKYlo2C01234567",
+      "customerName": "Jane Doe",
+      "customerEmail": "jane@example.com",
+      "technicianName": "John Doe",
+      "technicianEmail": "tech@example.com",
+      "serviceTitle": "AC Master Deep Cleaning",
       "amount": 75.00,
       "currency": "usd",
       "paymentStatus": "paid",
-      "paidAt": "2026-11-20T12:30:00.000Z"
+      "paidAt": "2026-11-20T12:30:00.000Z",
+      "createdAt": "2026-11-20T12:30:00.000Z"
     }
   }
   ```
@@ -588,9 +607,9 @@ Authorization: Bearer <JWT_TOKEN>
   }
   ```
 
-#### `GET /api/payments/admin/all` & `GET /api/payments/admin/payments`
+#### `GET /api/payments/admin/all`, `GET /api/payments/admin/payments` & `GET /api/admin/payments`
 - **Access:** Admin Only
-- **Description:** Returns all platform transactions and total collected revenue.
+- **Description:** Returns all platform transactions and total collected revenue across all three route aliases.
 - **Response `200`:**
   ```json
   {
@@ -685,6 +704,44 @@ Authorization: Bearer <JWT_TOKEN>
   {
     "success": true,
     "message": "User role updated successfully."
+  }
+  ```
+
+---
+
+### Test & Diagnostics API (`/api/test`)
+
+The backend provides token and role authorization test endpoints for development and diagnostic verification:
+
+#### `GET /api/test/protected`
+- **Access:** Authenticated User (Any role with a valid Bearer token)
+- **Response `200`:**
+  ```json
+  {
+    "message": "Authentication successful!",
+    "user": {
+      "id": "user_id_string",
+      "email": "user@example.com",
+      "role": "customer"
+    }
+  }
+  ```
+
+#### `GET /api/test/customer`
+- **Access:** Customer Only (`role: "customer"`)
+- **Response `200`:**
+  ```json
+  {
+    "message": "Customer access granted!"
+  }
+  ```
+
+#### `GET /api/test/admin`
+- **Access:** Admin Only (`role: "admin"`)
+- **Response `200`:**
+  ```json
+  {
+    "message": "Admin access granted!"
   }
   ```
 
